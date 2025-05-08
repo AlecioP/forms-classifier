@@ -15,5 +15,5 @@ Classification model for historical handwritten documents.
 
 ## TO-DO
 
-- [] Find a model pre-trained on a dataset closer to our domain 
+- [ ] Find a model pre-trained on a dataset closer to our domain 
 - [x] Include embeddings of words extracted from first iteration of ocr tool (kraken)
