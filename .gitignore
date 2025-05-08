@@ -1,0 +1,12 @@
+.ipynb_checkpoints/
+venv/
+classi/
+models_out/
+*.pt
+*.pth
+*.csv
+*.jpg
+*.png
+*.ipynb
+*.txt
+!requirements.txt
