@@ -4,7 +4,7 @@
 # # Classificator fine tuning pre-trained CNN 
 # Code from [here](https://medium.com/pythons-gurus/classification-of-medical-images-should-you-build-a-model-from-scratch-or-use-transfer-learning-140e94599ae8), [here](https://rumn.medium.com/custom-pytorch-image-classifier-from-scratch-d7b3c50f9fbe) and [here](https://pytorch.org/tutorials/beginner/introyt/trainingyt.html)
 
-# In[1]:
+#In[]:
 
 
 from PIL import Image
@@ -14,14 +14,14 @@ from torchinfo import summary
 from torchvision import transforms
 
 
-# In[2]:
+#In[]:
 
 
 import warnings
 warnings.simplefilter('ignore', Image.DecompressionBombWarning)
 
 
-# In[3]:
+#In[]:
 
 
 r_size = 256
@@ -33,7 +33,7 @@ RESIZE=288
 
 # ### Data loader
 
-# In[4]:
+#In[]:
 
 
 import os
@@ -70,13 +70,13 @@ print(f"Train dataset shape: {train_df.shape}")
 print(f"Test dataset shape: {test_df.shape}")
 
 
-# In[5]:
+#In[]:
 
 
 train_df.tail()
 
 
-# In[40]:
+#In[]:
 
 
 for cat in train_df.label.unique().tolist():
@@ -84,7 +84,7 @@ for cat in train_df.label.unique().tolist():
     print(f"{cat} : {elements} items")
 
 
-# In[7]:
+#In[]:
 
 
 class CustomTrainingData(torch.utils.data.Dataset):
@@ -106,7 +106,7 @@ class CustomTrainingData(torch.utils.data.Dataset):
         return image, label
 
 
-# In[8]:
+#In[]:
 
 
 from torch.utils.tensorboard import SummaryWriter
@@ -137,20 +137,20 @@ validation_loader = torch.utils.data.DataLoader(validation_set, batch_size=4, sh
 classes = tuple(train_df.label.unique().tolist())
 
 
-# In[9]:
+#In[]:
 
 
 sample_img,sample_label = next(iter(training_set))
 (transforms.ToPILImage()(sample_img)).show()
 
 
-# In[10]:
+#In[]:
 
 
 classes
 
 
-# In[11]:
+#In[]:
 
 
 NUM_CLASSES = len(classes)
@@ -158,7 +158,7 @@ NUM_CLASSES = len(classes)
 
 # #### Demo steps data augmentation
 
-# In[12]:
+#In[]:
 
 
 transform_demo_img = Image.open(train_df.iloc[0].image_path).convert('RGB')
@@ -194,7 +194,7 @@ for demo_i in demo_transformed_images:
 
 # ## Reference
 
-# In[13]:
+#In[]:
 
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -230,7 +230,7 @@ device
 # model.eval()
 # ```
 
-# In[14]:
+#In[]:
 
 
 # EfficientNet_B<Y>, <Y> is one of the following: 0, 1, 2, 3
@@ -243,14 +243,14 @@ pretrained.eval()
 
 # The following lines of code demonstrate how to use the pre-trained model to obtain the final output:
 
-# In[15]:
+#In[]:
 
 
 img = Image.open("./0001_2_1881_015.jpg")
 #img.show()
 
 
-# In[16]:
+#In[]:
 
 
 img1 = transforms.ToTensor()(img)
@@ -259,7 +259,7 @@ s, m = torch.std_mean(img1, dim=(0, 1, 2))
 img1 = transforms.Normalize(m, 2*s)(img1)
 
 
-# In[17]:
+#In[]:
 
 
 preprocess = weights.transforms()
@@ -270,13 +270,13 @@ with torch.no_grad():
 prediction = outputs.squeeze(0).softmax(0)
 
 
-# In[18]:
+#In[]:
 
 
 [weights.meta["categories"][x.item()] for x in prediction.topk(5)[1]]
 
 
-# In[19]:
+#In[]:
 
 
 class_id = prediction.argmax().item()
@@ -287,7 +287,7 @@ print(f"{category_name}: {100 * score:.1f}%")
 
 # We don’t need the final output; we need the hidden state from the feature extraction block. For AlexNet, VGG16, and EfficientNet_B<any_model>, it is quite straightforward: the model.features() function returns the output of the feature extraction block. The code block below shows how to prepare an input image for my classifier when using AlexNet, VGG16, or EfficientNet_B<any_model> for transfer learning:
 
-# In[20]:
+#In[]:
 
 
 with torch.no_grad():
@@ -295,14 +295,14 @@ with torch.no_grad():
 y.shape
 
 
-# In[21]:
+#In[]:
 
 
 y = y.squeeze(0)
 y.shape
 
 
-# In[22]:
+#In[]:
 
 
 # x.shape: x[0] - number of features, x[1], x[2] - picture sizes; 3 dimensions 
@@ -330,7 +330,7 @@ y.shape
 
 # #### _hide_
 
-# In[23]:
+#In[]:
 
 
 c='''
@@ -375,7 +375,7 @@ class DocClassifier(nn.Module):
 '''
 
 
-# In[24]:
+#In[]:
 
 
 c='''
@@ -405,7 +405,7 @@ net = DocClassifierTransfer(NUM_CLASSES, input_size_1, input_size_2, hidden_size
 
 # #### Model
 
-# In[25]:
+#In[]:
 
 
 class DocClassifierTransfer(nn.Module):
@@ -463,7 +463,7 @@ model = DocClassifierTransfer(NUM_CLASSES, input_size_1, input_size_2, hidden_si
 
 # An example summary of the classifier that uses EfficientNet_B1 features as input:
 
-# In[26]:
+#In[]:
 
 
 summary (model=model, input_data=next(iter(training_loader))[0].to(device), col_names=['input_size', 'output_size', 'num_params', 'trainable'])
@@ -475,14 +475,14 @@ summary (model=model, input_data=next(iter(training_loader))[0].to(device), col_
 
 # ### Optimizer and Loss function
 
-# In[27]:
+#In[]:
 
 
 #loss_fn = torch.nn.CrossEntropyLoss()
 #optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 
-# In[28]:
+#In[]:
 
 
 loss_fn = nn.CrossEntropyLoss()
@@ -491,7 +491,7 @@ optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
 # ### Per batch
 
-# In[29]:
+#In[]:
 
 
 def train_one_epoch(epoch_index):#, tb_writer):
@@ -545,7 +545,7 @@ def train_one_epoch(epoch_index):#, tb_writer):
 
 # ### Per Epoch
 
-# In[30]:
+#In[]:
 
 
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -602,7 +602,7 @@ for epoch in range(EPOCHS):
     epoch_number += 1
 
 
-# In[33]:
+#In[]:
 
 
 import pandas as pd
@@ -642,78 +642,100 @@ plt.show()
 
 # ## Classification using multimodal info
 
-# In[ ]:
+#In[]:
 
 
 get_ipython().system('pip install kraken')
 
 
-# In[ ]:
+#In[]:
 
 
 get_ipython().system('kraken list')
 
 
-# In[25]:
+#In[]:
 
 
-KRAKEN_MODEL="10.5281/zenodo.13788177"
+KRAKEN_MODEL="10.5281/zenodo.10592716"
 TRANSCRIPTION="krakenout.txt"
 KRAKENGET_OUT="krakengetout"
 MODELNAME_FILE = "modelname"
 
 
-# In[ ]:
+#In[]:
 
 
 get_ipython().system('kraken show {KRAKEN_MODEL}')
 
 
-# In[7]:
+#In[]:
 
 
-get_ipython().system('kraken get {KRAKEN_MODEL} > {KRAKENGET_OUT}')
+get_ipython().system('kraken get {KRAKEN_MODEL} 1> {KRAKENGET_OUT}')
 
 
-# In[26]:
+#In[]:
+
+
+get_ipython().system('cat $KRAKENGET_OUT | sed "s/\\x1B\\[[0-9;]\\{1,\\}[A-Za-z]//g"')
+
+
+#In[]:
 
 
 get_ipython().system('cat {KRAKENGET_OUT} | grep "Model name" | sed -e "s/Model name://" >{MODELNAME_FILE}')
 
 
-# In[27]:
+#In[]:
 
 
-get_ipython().system('kraken -i 0001_2_1881_015.jpg {TRANSCRIPTION} segment -bl ocr -m $(cat {MODELNAME_FILE})')
+get_ipython().system('kraken -d cuda:0 -i 0001_2_1881_015.jpg {TRANSCRIPTION} segment -bl ocr -m $(cat {MODELNAME_FILE})')
 
 
-# In[28]:
+#In[]:
+
+
+get_ipython().system('pip install nltk')
+
+
+#In[]:
 
 
 get_ipython().system('rm {KRAKENGET_OUT}')
 get_ipython().system('rm {MODELNAME_FILE}')
 
 
-# In[29]:
+#In[]:
+
+
+enumerate("parola")
+parola[2]
+
+
+#In[]:
 
 
 with open(TRANSCRIPTION,"r") as fd:
     content = fd.read()
+content
 
 
-# In[33]:
+#In[]:
 
 
-content.replace("-\n","").replace("\n"," ")
+content0 = ''.join([char if (char.isalpha()) or char == '\n' or char == ' ' or i == (len(content)-1) or content[i+1] == '\n' else '' for (i,char) in enumerate(content)])
+content0
 
 
-# In[34]:
+#In[]:
 
 
-get_ipython().system('pip install nltk')
+content2 = ''.join([char if not ( char == '\n' and content0[i-1].isalpha() ) else ' ' for (i,char) in enumerate(content0)])
+content2
 
 
-# In[57]:
+#In[]:
 
 
 import nltk
@@ -723,62 +745,142 @@ nltk.download('stopwords')
 nltk.download('punkt_tab')
 
 
-# In[54]:
+#In[]:
 
 
 from nltk.corpus import wordnet
 from nltk.corpus import stopwords
 
 
-# In[77]:
+#In[]:
 
 
-wordnet.lemmas("ir",lang="ita")
+get_ipython().system('python -m spacy download it_core_news_sm')
 
 
-# In[46]:
+#In[]:
 
 
-txt_words = content.replace("-\n","").replace("\n"," ")
+import spacy
 
 
-# In[69]:
+#In[]:
+
+
+nlp = spacy.load('it_core_news_sm')
+
+
+#In[]:
+
+
+def lemma_recursive(p):
+    before = p
+    update = ""
+    while True:
+        tokens = nlp(before)
+        if len(tokens) > 0:
+            update = nlp(before)[0].lemma_
+        if update == before:
+            break
+        before = update
+    return update
+
+
+#In[]:
+
+
+nlp("lita")[0].lemma_
+
+
+#In[]:
+
+
+lemma_recursive("lita")
+
+
+#In[]:
+
+
+wordnet.lemmas("lita",lang="ita")
+
+
+#In[]:
+
+
+def reverse_str(s):
+    return s[::-1]
+
+
+#In[]:
+
+
+compound = []
+for w in content2.split(' '):
+    if any(map(lambda c : not c.isalnum(),w)):
+        letters = [c if c.isalpha() else ' ' for c in w]
+        #print(f" {list(w)} -> {letters}")
+        parts = ''.join(letters).split()
+        #print(parts)
+        if len(parts)>2:
+            continue
+        compound += parts
+        compound.append(''.join(parts))
+compound
+
+
+#In[]:
+
+
+def word_exists(p):
+    return len(wordnet.lemmas(lemma_recursive(p),lang="ita"))>0
+
+
+#In[]:
 
 
 good_words = []
+for w in content2.split() + compound:
 
-
-# In[70]:
-
-
-for w in txt_words.split():
     if w in stopwords.words("italian"):
         continue
-    if any(char.isdigit() for char in w):
-        continue
-    if len(wordnet.lemmas(w,lang="ita")) > 0 :
+    if word_exists(w) :
         good_words.append(w)
     else :
         for old,new in [('a','à'),('e','è'),('e','é'),('i','ì'),('o','ò'),('u','ù')]:
-            if len(wordnet.lemmas(w.replace(old,new),lang="ita")) > 0 :
-                good_words.append(w)
-            if len(wordnet.lemmas(w.replace(new,old),lang="ita")) > 0 :
-                good_words.append(w)
+            if old in w or new in w :
+                replace1 = reverse_str(reverse_str(w).replace(old,new,1))
+                replace2 = reverse_str(reverse_str(w).replace(new,old,1))
+
+                if word_exists(replace1) :
+                    print(f"Replace {old} with {new} -> {w} becomes {replace1} ")
+                    good_words.append(replace1)
+                if word_exists(replace2) :
+                    print(f"Replace {new} with {old} -> {w} becomes {replace2} ")
+                    good_words.append(replace2)
 
 
-# In[74]:
+#In[]:
 
 
-good_words.sort()
+res0 = [p if p[-1].isalpha() else p[:-1] for p in good_words]
+res0
 
 
-# In[78]:
+#In[]:
 
 
-set(good_words)
+res = list(filter(lambda x : len(x) > 2,set(res0)))
+res.sort()
+res
 
 
-# In[ ]:
+#In[]:
+
+
+len(res)
+
+
+#In[]:
 
 
 

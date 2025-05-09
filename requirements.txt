@@ -4,3 +4,4 @@ torchvision
 torchinfo
 scikit-learn
 nltk
+spacy

@@ -10,3 +10,4 @@ models_out/
 *.ipynb
 *.txt
 !requirements.txt
+*.bak

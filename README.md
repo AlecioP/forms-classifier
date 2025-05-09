@@ -17,3 +17,10 @@ Classification model for historical handwritten documents.
 
 - [ ] Find a model pre-trained on a dataset closer to our domain 
 - [x] Include embeddings of words extracted from first iteration of ocr tool (kraken)
+
+##
+
+Correct `# In[0]` comments with:
+```bash
+sed -i.bak -e "s/\#\s*In\[[0-9 ]*\]/#In\[\]/" Prototype.py
+```
