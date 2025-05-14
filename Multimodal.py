@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# # Classificator fine tuning pre-trained CNN 
-# Code from [here](https://medium.com/pythons-gurus/classification-of-medical-images-should-you-build-a-model-from-scratch-or-use-transfer-learning-140e94599ae8), [here](https://rumn.medium.com/custom-pytorch-image-classifier-from-scratch-d7b3c50f9fbe) and [here](https://pytorch.org/tutorials/beginner/introyt/trainingyt.html)
-
 # In[ ]:
 
 
@@ -47,6 +44,8 @@ DATA_F = "classi"
 for class_cat in os.listdir(DATA_F):
     print(class_cat)
     for image_object in os.listdir(f"{DATA_F}/{class_cat}"):
+        if not image_object.endswith(".jpg"):
+            continue
         image_path_list.append(f"{DATA_F}/{class_cat}/{image_object}")
         label_list.append(f"{class_cat}")
 
@@ -89,10 +88,161 @@ for cat in train_df.label.unique().tolist():
 
 
 class CustomTrainingData(torch.utils.data.Dataset):
+
+    bert_model = None
+    bert_token = None
+
     def __init__(self, csv_df, class_list, transform=None):
         self.df = csv_df
         self.transform = transform
         self.class_list = class_list
+
+    def lemma_recursive(p):
+        current = p
+        update = ""
+        while True:
+            tokens = nlp(current)
+            if len(tokens) > 0:
+                update = tokens[0].__str__()
+
+            if update == current:
+                break
+            current = update
+        return update
+
+    def reverse_str(s):
+        return s[::-1]
+
+    @classmethod   
+    def word_exists(cls,p):
+        return len(wordnet.lemmas(cls.lemma_recursive(p),lang="ita"))>0
+
+    def clean_content(content : str) -> str:
+        lines = content.split('\n')
+
+        for i, l in enumerate(lines):
+            lines[i] = ''.join([char if char.isalpha() else ' ' for char in lines[i]])
+
+        for i, l in enumerate(lines):
+            tokes = l.split(' ')
+            tokes = list(filter(lambda x: any(list(map(lambda c : c.isalpha(),x))),tokes))
+            lines[i] = ' '.join(tokes)
+
+
+        for i, l in enumerate(lines):
+            tokes = l.split(' ') # Now I'm sure there is no dumb token
+            if i+1 < len(lines): # I can safely take a look to next line
+                tokes.append(tokes[-1]+lines[i+1].split(' ')[0]) #Join last of this line with first of next line
+                lines[i] = ' '.join(tokes)
+
+
+        return ' '.join(lines)
+
+    @classmethod
+    def document_words_bert_embeddings_centroid(cls, src : str,bert_pretrained : str) -> torch.Tensor:
+        if cls.bert_token is None:
+            print("Init Bert tokenizer")
+            cls.bert_token = BertTokenizer.from_pretrained(bert_pretrained)
+        if cls.bert_model is None:
+            print("Init Bert Model")
+            cls.bert_model = BertModel.from_pretrained(bert_pretrained).to(device)
+            for p in cls.bert_model.parameters():
+                p.requires_grad = False
+            cls.bert_model.eval()
+
+
+        csvs = [x for x in Path(src).parents[0].glob('**/*') if x.is_file() and x.suffix == ".csv"]
+        if len(csvs) == 0 :
+            print("NO csv with transcription. Generating automatically")
+
+
+            print("STEP 1 : Run OCR Model using Kraken. The model detects only printed and typewritten")
+
+            TMP_FILE = Path(src).with_suffix(".kraken").resolve()#f"transcription_tmp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            if not TMP_FILE.exists():
+                # kraken -d cuda:0 -i 0001_2_1881_015.jpg {TRANSCRIPTION} segment -bl ocr -m $(cat {MODELNAME_FILE})
+                subprocess.run(["kraken", "-d", "cuda:0", "-i", src, TMP_FILE, "segment", "-bl", "ocr", "-m", MODELNAME]) 
+
+
+            print("STEP 2 : Read file. Clean from special characters. Join words split due to newline")
+            with open(TMP_FILE,"r") as fd:
+                content1 = cls.clean_content(fd.read())
+            compound = []
+            for w in content1.split(' '):
+                if any(map(lambda c : not c.isalnum(),w)):
+                    letters = [c if c.isalpha() else ' ' for c in w]
+                    #print(f" {list(w)} -> {letters}")
+                    parts = ''.join(letters).split()
+                    #print(parts)
+                    if len(parts)>2:
+                        continue
+                    compound += parts
+                    compound.append(''.join(parts))
+
+            print("STEP 3 : Ask wordnet if knows about lemma equal to word (word exists). Also try replacing vocals with accents")
+            good_words = []
+            for w in content1.split(' ') + compound:
+
+                if w in stopwords.words("italian"):
+                    continue
+                if cls.word_exists(w) :
+                    good_words.append(w)
+                else :
+                    for old,new in [('a','à'),('e','è'),('e','é'),('i','ì'),('o','ò'),('u','ù')]:
+                        if old in w or new in w :
+                            replace1 = cls.reverse_str(cls.reverse_str(w).replace(old,new,1))
+                            replace2 = cls.reverse_str(cls.reverse_str(w).replace(new,old,1))
+
+                            if cls.word_exists(replace1) :
+                                print(f"Replace {old} with {new} -> {w} becomes {replace1} ")
+                                good_words.append(replace1)
+                            if cls.word_exists(replace2) :
+                                print(f"Replace {new} with {old} -> {w} becomes {replace2} ")
+                                good_words.append(replace2)
+
+            print(good_words)
+            res0 = [p if p[-1].isalpha() else p[:-1] for p in good_words]
+            print(res0)
+            res1 = list(filter(lambda ww : len(ww) > 2,set(res0)))
+
+            print(res1)
+
+            print("STEP 4 : Ask BERT for word embeddings")
+
+            bert_enc = cls.bert_token.batch_encode_plus( res1,# List of input texts
+                                                    padding=True,              # Pad to the maximum sequence length
+                                                    truncation=True,           # Truncate to the maximum sequence length if necessary
+                                                    return_tensors='pt',      # Return PyTorch tensors
+                                                    add_special_tokens=False    # Add special tokens CLS and SEP
+                                                ).to(device)
+
+            with torch.no_grad():
+                bert_out = cls.bert_model(bert_enc['input_ids'], attention_mask=bert_enc['attention_mask'])
+                word_embeddings = bert_out.last_hidden_state
+
+            print(word_embeddings.shape)
+
+            print("STEP 5 : Compute mean value of tokens in 'sentence' (the word) then mean value of all sentences")
+            ocr_emb = word_embeddings.mean(dim=1).mean(dim=0)
+
+            print(ocr_emb.shape)
+            with open(Path(src).with_suffix(".csv"),"w") as fd:
+                for v in ocr_emb:
+                    fd.write(f"{v}\n")
+        #endIF tensor file missing
+        csvs = [x for x in Path(src).parents[0].glob('**/*') if x.is_file() and x.suffix == ".csv"] # again
+
+        #print("Got file with textual features")
+        ocr_emb_r : list[int] = []
+
+        with open(csvs[0],"r") as fd: # CSVS[0] should not be out of bounds. If so, then just throw exception because i don't know what's going on
+            for line in fd.read().split('\n'):
+                if line == '':
+                    continue
+                ocr_emb_r.append(float(line))
+
+        return torch.as_tensor(ocr_emb_r)
 
     def __len__(self):
         return self.df.shape[0]
@@ -104,7 +254,7 @@ class CustomTrainingData(torch.utils.data.Dataset):
         if self.transform:
             image = self.transform(source)
 
-        return image, label, self.df.iloc[index].image_path
+        return image, label, CustomTrainingData.document_words_bert_embeddings_centroid(self.df.iloc[index].image_path,"bert-base-multilingual-uncased")
 
 
 # In[ ]:
@@ -175,6 +325,12 @@ pretrained.eval()
 # In[ ]:
 
 
+import time
+
+
+# In[ ]:
+
+
 get_ipython().system('pip install ipdb')
 import ipdb
 
@@ -227,13 +383,14 @@ MODELNAME_FILE = "modelname"
 
 
 class DocClassifierTransfer(nn.Module):
-    def __init__(self, num_classes, input_size_1, input_size_2, hidden_size,bert_pretrained):
+    def __init__(self, num_classes, input_size_1, input_size_2, hidden_size):
         super(DocClassifierTransfer, self).__init__()
         self.num_classes = num_classes
 
-        self.ln1 = nn.Linear(input_size_2+bert_emb_size, hidden_size)
+        self.ln0 = nn.Linear(bert_emb_size,input_size_2)
+        self.ln1 = nn.Linear(input_size_2, hidden_size)
         self.relu = nn.ReLU(inplace=True)
-        self.ln2 = nn.Linear(input_size_1*hidden_size, self.num_classes)
+        self.ln2 = nn.Linear((input_size_1+1)*hidden_size, self.num_classes)
         self.dropout = nn.Dropout(p=0.2)
 
         self.flat1 = nn.Flatten()
@@ -243,164 +400,23 @@ class DocClassifierTransfer(nn.Module):
         for p in self.pretrained.parameters():
             p.requires_grad = False
 
-        self.bert_token = BertTokenizer.from_pretrained(bert_pretrained)
-
-        self.bert_model = BertModel.from_pretrained(bert_pretrained).to(device)
-        for p in self.bert_model.parameters():
-            p.requires_grad = False
-
-    def lemma_recursive(p):
-        current = p
-        update = ""
-        while True:
-            tokens = nlp(current)
-            if len(tokens) > 0:
-                update = tokens[0].__str__()
-
-            if update == current:
-                break
-            current = update
-        return update
-
-    def reverse_str(s):
-        return s[::-1]
-
-    def word_exists(p):
-        return len(wordnet.lemmas(DocClassifierTransfer.lemma_recursive(p),lang="ita"))>0
-
-    def forward(self, x, src_t):
-
+    def forward(self, x, centroid):
+        start = time.time()
         with torch.no_grad():
             x = self.pretrained.features(x)
             x = torch.reshape(x, (x.shape[0],x.shape[1], x.shape[2]*x.shape[3]))
-
-        for src in src_t:
-            if not Path(src).with_suffix(".csv").exists() :
-                print("NO csv with transcription. Generating automatically")
-
-
-                print("STEP 1 : Run OCR Model using Kraken. The model detects only printed and typewritten")
-
-                TMP_FILE = Path(src).with_suffix(".kraken").resolve()#f"transcription_tmp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-                if not TMP_FILE.exists():
-                    # kraken -d cuda:0 -i 0001_2_1881_015.jpg {TRANSCRIPTION} segment -bl ocr -m $(cat {MODELNAME_FILE})
-                    subprocess.run(["kraken", "-d", "cuda:0", "-i", src, TMP_FILE, "segment", "-bl", "ocr", "-m", MODELNAME]) 
-
-
-                print("STEP 2 : Read file. Clean from special characters. Join words split due to newline")
-                with open(TMP_FILE,"r") as fd:
-                    content1 = DocClassifierTransfer.clean_content(fd.read())
-                compound = []
-                for w in content1.split(' '):
-                    if any(map(lambda c : not c.isalnum(),w)):
-                        letters = [c if c.isalpha() else ' ' for c in w]
-                        #print(f" {list(w)} -> {letters}")
-                        parts = ''.join(letters).split()
-                        #print(parts)
-                        if len(parts)>2:
-                            continue
-                        compound += parts
-                        compound.append(''.join(parts))
-
-                print("STEP 3 : Ask wordnet if knows about lemma equal to word (word exists). Also try replacing vocals with accents")
-                good_words = []
-                for w in content1.split(' ') + compound:
-
-                    if w in stopwords.words("italian"):
-                        continue
-                    if DocClassifierTransfer.word_exists(w) :
-                        good_words.append(w)
-                    else :
-                        for old,new in [('a','à'),('e','è'),('e','é'),('i','ì'),('o','ò'),('u','ù')]:
-                            if old in w or new in w :
-                                replace1 = DocClassifierTransfer.reverse_str(DocClassifierTransfer.reverse_str(w).replace(old,new,1))
-                                replace2 = DocClassifierTransfer.reverse_str(DocClassifierTransfer.reverse_str(w).replace(new,old,1))
-
-                                if DocClassifierTransfer.word_exists(replace1) :
-                                    print(f"Replace {old} with {new} -> {w} becomes {replace1} ")
-                                    good_words.append(replace1)
-                                if DocClassifierTransfer.word_exists(replace2) :
-                                    print(f"Replace {new} with {old} -> {w} becomes {replace2} ")
-                                    good_words.append(replace2)
-
-                print(good_words)
-                res0 = [p if p[-1].isalpha() else p[:-1] for p in good_words]
-                print(res0)
-                res1 = list(filter(lambda ww : len(ww) > 2,set(res0)))
-
-                print(res1)
-
-                print("STEP 4 : Ask BERT for word embeddings")
-
-                bert_enc = self.bert_token.batch_encode_plus( res1,# List of input texts
-                                                        padding=True,              # Pad to the maximum sequence length
-                                                        truncation=True,           # Truncate to the maximum sequence length if necessary
-                                                        return_tensors='pt',      # Return PyTorch tensors
-                                                        add_special_tokens=False    # Add special tokens CLS and SEP
-                                                    ).to(device)
-
-                with torch.no_grad():
-                    bert_out = self.bert_model(bert_enc['input_ids'], attention_mask=bert_enc['attention_mask'])
-                    word_embeddings = bert_out.last_hidden_state
-
-                print(word_embeddings.shape)
-
-                print("STEP 5 : Compute mean value of tokens in 'sentence' (the word) then mean value of all sentences")
-                ocr_emb = word_embeddings.mean(dim=1).mean(dim=0)
-
-                print(ocr_emb.shape)
-                with open(Path(src).with_suffix(".csv"),"w") as fd:
-                    for v in ocr_emb:
-                        fd.write(f"{v}\n")
-            #endIF tensor file missing
-
-            print("Got file with textual features")
-            ocr_emb_r : list[int] = []
-
-            with open(Path(src).with_suffix(".csv"),"r") as fd:
-                for line in fd.read().split('\n'):
-                    if line == '':
-                        continue
-                    ocr_emb_r.append(float(line))
-
-            ocr_emb_tensor = torch.as_tensor(ocr_emb_r)
-            print(ocr_emb_tensor)
-            print(ocr_emb_tensor.shape)
-        #endFOR source image path in batch
-        x = torch.cat(x,ocr_emb_tensor)
-        # Maybe do some kind of normalization visual features and textual features
+        #print(f"EfficientNet B2 feature extraction time : {time.time() - start}")
+        centroid = self.ln0(centroid) # Now shape should be batch_size x input_size_2
+        centroid = centroid.unsqueeze(1)
+        x = torch.cat((x,centroid),dim=1)
         x = self.ln1(x)
         x = self.relu(x)
         x = self.dropout(x)
-
         x = self.flat1(x)
         x = self.ln2(x)
-
         return x
 
-    def clean_content(content : str) -> str:
-        lines = content.split('\n')
-
-        for i, l in enumerate(lines):
-            lines[i] = ''.join([char if char.isalpha() else ' ' for char in lines[i]])
-
-        for i, l in enumerate(lines):
-            tokes = l.split(' ')
-            tokes = list(filter(lambda x: any(list(map(lambda c : c.isalpha(),x))),tokes))
-            lines[i] = ' '.join(tokes)
-
-
-        for i, l in enumerate(lines):
-            tokes = l.split(' ') # Now I'm sure there is no dumb token
-            if i+1 < len(lines): # I can safely take a look to next line
-                tokes.append(tokes[-1]+lines[i+1].split(' ')[0]) #Join last of this line with first of next line
-                lines[i] = ' '.join(tokes)
-
-
-        return ' '.join(lines)
-
-model = DocClassifierTransfer(NUM_CLASSES, input_size_1, input_size_2, hidden_size,"bert-base-multilingual-uncased").to(device)
+model = DocClassifierTransfer(NUM_CLASSES, input_size_1, input_size_2, hidden_size).to(device)
 
 
 # In[ ]:
@@ -417,7 +433,7 @@ for i in range(0,len(sample_data)):
 # In[ ]:
 
 
-summary(model=model, input_data=(sample_data[0].to(device),sample_data[2]), col_names=['input_size', 'output_size', 'num_params', 'trainable'])
+summary(model=model, input_data=(sample_data[0].to(device),sample_data[2].to(device)), col_names=['input_size', 'output_size', 'num_params', 'trainable'])
 
 
 # ## Classic pytorch training loop
@@ -455,14 +471,14 @@ def train_one_epoch(epoch_index):#, tb_writer):
         for i, data in enumerate(training_loader):
 
             # Every data instance is an input + label pair
-            inputs, labels, src_img = data
-            inputs, labels, src_img = inputs.to(device), labels.to(device), src_img.to(device)
+            inputs, labels, centroid = data
+            inputs, labels, centroid = inputs.to(device), labels.to(device), centroid.to(device)
 
             # Zero your gradients for every batch!
             optimizer.zero_grad()
 
             # Make predictions for this batch
-            outputs = model((inputs,img_src))
+            outputs = model(inputs,centroid)
 
             # Compute the loss and its gradients
             loss = loss_fn(outputs, labels)
@@ -585,8 +601,3 @@ plt.tight_layout()
 
 # Display the plot.
 plt.show()
-
-
-
-
-
