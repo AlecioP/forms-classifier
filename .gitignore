@@ -2,6 +2,7 @@
 venv/
 classi/
 models_out/
+demo/
 *.pt
 *.pth
 *.csv
