@@ -27,9 +27,78 @@ input_size_2=81
 hidden_size=152
 RESIZE=288
 bert_emb_size=768
+BATCH_SIZE=4
 
 
-# ### Data loader
+# In[ ]:
+
+
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+
+
+# In[ ]:
+
+
+from torchvision.models import efficientnet_b2, EfficientNet_B2_Weights
+
+
+# In[ ]:
+
+
+import time
+
+
+# In[ ]:
+
+
+#!pip install ipdb
+#import ipdb
+
+
+# In[ ]:
+
+
+from transformers import BertTokenizer, BertModel
+
+
+# In[ ]:
+
+
+from pathlib import Path
+import subprocess
+
+
+# In[ ]:
+
+
+import nltk
+nltk.download('wordnet',quiet=True)
+nltk.download('omw-1.4',quiet=True)
+nltk.download('stopwords',quiet=True)
+nltk.download('punkt_tab',quiet=True)
+
+from nltk.corpus import wordnet
+from nltk.corpus import stopwords
+
+import spacy
+
+
+# In[ ]:
+
+
+nlp = spacy.load('it_core_news_sm')
+
+
+# In[ ]:
+
+
+KRAKEN_MODEL="10.5281/zenodo.10592716"
+MODELNAME="catmus-print-fondue-large.mlmodel"
+TRANSCRIPTION="krakenout.txt"
+KRAKENGET_OUT="krakengetout"
+MODELNAME_FILE = "modelname"
+
 
 # In[ ]:
 
@@ -37,6 +106,26 @@ bert_emb_size=768
 import os
 import pandas as pd
 from sklearn.model_selection import train_test_split
+
+
+# In[ ]:
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+# In[ ]:
+
+
+import random
+
+
+# ### Data loader
+
+# In[ ]:
+
+
 # create a csv file with image_path and respective label
 image_path_list = []
 label_list = []
@@ -92,10 +181,13 @@ class CustomTrainingData(torch.utils.data.Dataset):
     bert_model = None
     bert_token = None
 
-    def __init__(self, csv_df, class_list, transform=None):
+    def __init__(self, csv_df, class_list, transform=None, augment_factor=1):
         self.df = csv_df
         self.transform = transform
         self.class_list = class_list
+        if augment_factor < 1:
+            raise ValueError(f"You should increase dataset dimension, but Augmentation factor is {augment_factor}")
+        self.augment_factor = int(augment_factor)
 
     def lemma_recursive(p):
         current = p
@@ -155,7 +247,6 @@ class CustomTrainingData(torch.utils.data.Dataset):
         if len(csvs) == 0 :
             print("NO csv with transcription. Generating automatically")
 
-
             print("STEP 1 : Run OCR Model using Kraken. The model detects only printed and typewritten")
 
             TMP_FILE = Path(src).with_suffix(".kraken").resolve()#f"transcription_tmp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -208,9 +299,33 @@ class CustomTrainingData(torch.utils.data.Dataset):
 
             print(res1)
 
-            print("STEP 4 : Ask BERT for word embeddings")
+            with open(Path(src).with_suffix(".csv"),"w") as fd:
+                for bow_el in res1:
+                    fd.write(f"{bow_el}\n")
+        #endIF bow file missing
 
-            bert_enc = cls.bert_token.batch_encode_plus( res1,# List of input texts
+        csvs = [x for x in Path(src).parents[0].glob('**/*') if x.is_file() and x.suffix == ".csv"] # again
+
+        image_class_bow = []
+        with open(csvs[0],"r") as fd: # CSVS[0] should not be out of bounds. If so, then just throw exception because i don't know what's going on
+            for line in fd.read().split('\n'):
+                if line != r"": # Last line is always empty due to how i print in file. That causes a tensor of Nan values to be added to set if line is not ignored
+                    image_class_bow.append(line)
+
+        #print(f"From file read bow {image_class_bow}")
+        bow_droprate = 0.3
+
+        while True: # Repeat the process if all words got dropped
+            image_class_bow1 = list(filter(lambda x : random.random() < bow_droprate, image_class_bow)) # MASK words -> drop 1/3 of words
+            if len(image_class_bow1) > 0 and len(image_class_bow1) < len(image_class_bow):
+                break
+
+        #print(f"After mask {image_class_bow1}")
+
+        centroids = []
+        for bag in [image_class_bow,image_class_bow1]:
+
+            bert_enc = cls.bert_token.batch_encode_plus( bag,# List of input texts
                                                     padding=True,              # Pad to the maximum sequence length
                                                     truncation=True,           # Truncate to the maximum sequence length if necessary
                                                     return_tensors='pt',      # Return PyTorch tensors
@@ -221,33 +336,19 @@ class CustomTrainingData(torch.utils.data.Dataset):
                 bert_out = cls.bert_model(bert_enc['input_ids'], attention_mask=bert_enc['attention_mask'])
                 word_embeddings = bert_out.last_hidden_state
 
-            print(word_embeddings.shape)
-
-            print("STEP 5 : Compute mean value of tokens in 'sentence' (the word) then mean value of all sentences")
+            #print("STEP 5 : Compute mean value of tokens in 'sentence' (the word) then mean value of all sentences")
             ocr_emb = word_embeddings.mean(dim=1).mean(dim=0)
+            centroids.append(ocr_emb)
 
-            print(ocr_emb.shape)
-            with open(Path(src).with_suffix(".csv"),"w") as fd:
-                for v in ocr_emb:
-                    fd.write(f"{v}\n")
-        #endIF tensor file missing
-        csvs = [x for x in Path(src).parents[0].glob('**/*') if x.is_file() and x.suffix == ".csv"] # again
-
-        #print("Got file with textual features")
-        ocr_emb_r : list[int] = []
-
-        with open(csvs[0],"r") as fd: # CSVS[0] should not be out of bounds. If so, then just throw exception because i don't know what's going on
-            for line in fd.read().split('\n'):
-                if line == '':
-                    continue
-                ocr_emb_r.append(float(line))
-
-        return torch.as_tensor(ocr_emb_r)
+        if torch.equal(centroids[0],centroids[1]):
+            print("After removing words centroid is the same")
+        return torch.as_tensor(centroids[1])
 
     def __len__(self):
-        return self.df.shape[0]
+        return self.df.shape[0] * self.augment_factor
 
     def __getitem__(self, index):
+        index = index % self.df.shape[0]
         source = Image.open(self.df.iloc[index].image_path).convert('RGB')
         label = self.class_list.index(self.df.iloc[index].label)
 
@@ -259,9 +360,6 @@ class CustomTrainingData(torch.utils.data.Dataset):
 
 # In[ ]:
 
-
-from torch.utils.tensorboard import SummaryWriter
-from datetime import datetime
 
 t_list = [
         transforms.Resize((RESIZE,RESIZE)),
@@ -277,12 +375,12 @@ transform = transforms.Compose(t_list)
 transform_1 = transforms.Compose([t_list[0],t_list[5],t_list[6]])
 
 # Create datasets for training & validation, download if necessary
-training_set = CustomTrainingData(train_df, train_df.label.unique().tolist(), transform)
-validation_set = CustomTrainingData(test_df, test_df.label.unique().tolist(), transform_1)
+training_set = CustomTrainingData(train_df, train_df.label.unique().tolist(), transform, augment_factor=5)
+validation_set = CustomTrainingData(test_df, test_df.label.unique().tolist(), transform_1, augment_factor=5)
 
 # Create data loaders for our datasets; shuffle for training, not for validation
-training_loader = torch.utils.data.DataLoader(training_set, batch_size=4, shuffle=True)
-validation_loader = torch.utils.data.DataLoader(validation_set, batch_size=4, shuffle=False)
+training_loader = torch.utils.data.DataLoader(training_set, batch_size=BATCH_SIZE, shuffle=True)
+validation_loader = torch.utils.data.DataLoader(validation_set, batch_size=BATCH_SIZE, shuffle=False)
 
 # Class labels
 classes = tuple(train_df.label.unique().tolist())
@@ -313,7 +411,7 @@ device
 
 
 # EfficientNet_B<Y>, <Y> is one of the following: 0, 1, 2, 3
-from torchvision.models import efficientnet_b2, EfficientNet_B2_Weights
+
 weights = EfficientNet_B2_Weights.DEFAULT
 pretrained = efficientnet_b2(weights=weights).to(device)
 # don't foget to call 'eval' to use the model for inference
@@ -325,69 +423,15 @@ pretrained.eval()
 # In[ ]:
 
 
-import time
-
-
-# In[ ]:
-
-
-get_ipython().system('pip install ipdb')
-import ipdb
-
-
-# In[ ]:
-
-
-from transformers import BertTokenizer, BertModel
-
-
-# In[ ]:
-
-
-from pathlib import Path
-import subprocess
-
-
-# In[ ]:
-
-
-import nltk
-nltk.download('wordnet')
-nltk.download('omw-1.4')
-nltk.download('stopwords')
-nltk.download('punkt_tab')
-
-from nltk.corpus import wordnet
-from nltk.corpus import stopwords
-
-import spacy
-
-
-# In[ ]:
-
-
-nlp = spacy.load('it_core_news_sm')
-
-
-# In[ ]:
-
-
-KRAKEN_MODEL="10.5281/zenodo.10592716"
-MODELNAME="catmus-print-fondue-large.mlmodel"
-TRANSCRIPTION="krakenout.txt"
-KRAKENGET_OUT="krakengetout"
-MODELNAME_FILE = "modelname"
-
-
-# In[ ]:
-
-
 class DocClassifierTransfer(nn.Module):
     def __init__(self, num_classes, input_size_1, input_size_2, hidden_size):
         super(DocClassifierTransfer, self).__init__()
         self.num_classes = num_classes
 
         self.ln0 = nn.Linear(bert_emb_size,input_size_2)
+        self.drop0 = nn.Dropout(p=0.2) #High dropout to avoid overfitting to single tensor per class
+
+
         self.ln1 = nn.Linear(input_size_2, hidden_size)
         self.relu = nn.ReLU(inplace=True)
         self.ln2 = nn.Linear((input_size_1+1)*hidden_size, self.num_classes)
@@ -401,12 +445,13 @@ class DocClassifierTransfer(nn.Module):
             p.requires_grad = False
 
     def forward(self, x, centroid):
-        start = time.time()
+        #start = time.time()
         with torch.no_grad():
             x = self.pretrained.features(x)
             x = torch.reshape(x, (x.shape[0],x.shape[1], x.shape[2]*x.shape[3]))
         #print(f"EfficientNet B2 feature extraction time : {time.time() - start}")
         centroid = self.ln0(centroid) # Now shape should be batch_size x input_size_2
+        centroid = self.drop0(centroid)
         centroid = centroid.unsqueeze(1)
         x = torch.cat((x,centroid),dim=1)
         x = self.ln1(x)
@@ -463,54 +508,53 @@ def train_one_epoch(epoch_index):#, tb_writer):
     running_loss = 0.
     last_loss = 0.
 
-    DATA_AUGMENTATION = 5 # Artificially augment data of 5 times
-    for times in range(0,DATA_AUGMENTATION):
-        # Here, we use enumerate(training_loader) instead of
-        # iter(training_loader) so that we can track the batch
-        # index and do some intra-epoch reporting
-        for i, data in enumerate(training_loader):
 
-            # Every data instance is an input + label pair
-            inputs, labels, centroid = data
-            inputs, labels, centroid = inputs.to(device), labels.to(device), centroid.to(device)
+    # Here, we use enumerate(training_loader) instead of
+    # iter(training_loader) so that we can track the batch
+    # index and do some intra-epoch reporting
+    for i, data in enumerate(training_loader):
 
-            # Zero your gradients for every batch!
-            optimizer.zero_grad()
+        # Every data instance is an input + label pair
+        inputs, labels, centroid = data
+        inputs, labels, centroid = inputs.to(device), labels.to(device), centroid.to(device)
 
-            # Make predictions for this batch
-            outputs = model(inputs,centroid)
+        # Zero your gradients for every batch!
+        optimizer.zero_grad()
 
-            # Compute the loss and its gradients
-            loss = loss_fn(outputs, labels)
-            loss.backward()
+        # Make predictions for this batch
+        outputs = model(inputs,centroid)
 
-            # Adjust learning weights
-            optimizer.step()
+        # Compute the loss and its gradients
+        loss = loss_fn(outputs, labels)
+        loss.backward()
 
-            # Gather data and report
-            running_loss += loss.item()
-            '''
-            print(len(data))
-            print(data[0].shape)
-            print(data[1].shape)
-            '''
-            every_n = min(len(training_loader.dataset)/10,1000)
-            every_n = int(every_n)
+        # Adjust learning weights
+        optimizer.step()
 
-            if i % every_n == (every_n - 1 ):
-                last_loss = running_loss / (every_n) # loss per batch
-                print('  batch {} loss: {}'.format(i + 1, last_loss))
-                #tb_x = epoch_index * len(training_loader) + i + 1
-                #tb_writer.add_scalar('Loss/train', last_loss, tb_x)
-                running_loss = 0.
-        print("  --")
+        # Gather data and report
+        running_loss += loss.item()
+        '''
+        print(len(data))
+        print(data[0].shape)
+        print(data[1].shape)
+        '''
+        every_n = min(len(training_loader.dataset)/(10*BATCH_SIZE),1000)
+        every_n = int(every_n)
+
+        if i % every_n == (every_n - 1 ):
+            last_loss = running_loss / (every_n) # loss per batch
+            print(f'{(int(i/every_n)+1):02d}) batch {i + 1} loss: {last_loss:.4f}')
+            #tb_x = epoch_index * len(training_loader) + i + 1
+            #tb_writer.add_scalar('Loss/train', last_loss, tb_x)
+            running_loss = 0.
+
 
     return last_loss
 
 
 # ### Per Epoch
 
-# In[ ]:
+# In[31]:
 
 
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -522,7 +566,7 @@ EPOCHS = 10
 best_vloss = 1_000_000.
 
 for epoch in range(EPOCHS):
-    print('EPOCH {}:'.format(epoch_number + 1))
+    print('EPOCH{}:'.format(epoch_number + 1))
 
     # Make sure gradient tracking is on, and do a pass over the data
     model.train(True)
@@ -537,15 +581,15 @@ for epoch in range(EPOCHS):
     # Disable gradient computation and reduce memory consumption.
     with torch.no_grad():
         for i, vdata in enumerate(validation_loader):
-            vinputs, vlabels = vdata
-            vinputs, vlabels = vinputs.to(device), vlabels.to(device)
-            voutputs = model(vinputs)
+            vinputs, vlabels, vcentr = vdata
+            vinputs, vlabels, vcentr = vinputs.to(device), vlabels.to(device), vcentr.to(device)
+            voutputs = model(vinputs,vcentr)
             vloss = loss_fn(voutputs, vlabels)
 
             running_vloss += vloss
 
     avg_vloss = running_vloss / (i + 1)
-    print('LOSS train {} valid {}'.format(avg_loss, avg_vloss))
+    print(f'LOSS train {avg_loss:.4f} valid {avg_vloss:.4f}')
 
     # Log the running loss averaged per batch
     # for both training and validation
@@ -567,11 +611,16 @@ for epoch in range(EPOCHS):
     epoch_number += 1
 
 
+# --------
+# 
+# Both train loss and validation loss should be less than `0.2`
+# 
+# [Reference : Interpretation of Cross-Entropy values](https://wiki.cloudfactory.com/docs/mp-wiki/loss/cross-entropy-loss#:~:text=Cross%2DEntropy%20%3C%200.05%3A%20On,%2DEntropy%20%3E%201.00%3A%20Terrible.)
+# 
+# --------
+
 # In[ ]:
 
-
-import pandas as pd
-import matplotlib.pyplot as plt
 
 # Load the CSV file; this assumes the first row has the series names.
 df = pd.read_csv('data.csv',delimiter=";")
@@ -601,3 +650,4 @@ plt.tight_layout()
 
 # Display the plot.
 plt.show()
+
